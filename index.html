@@ -12,6 +12,38 @@
             box-sizing: border-box;
         }
 
+        /* Custom Themed Scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(10, 10, 15, 0.8);
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #00f5ff, #ff00ff);
+            border-radius: 5px;
+            border: 2px solid rgba(10, 10, 15, 0.8);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #00f5ff, #ff00ff);
+            box-shadow: 0 0 10px rgba(0, 245, 255, 0.5);
+        }
+
+        ::-webkit-scrollbar-corner {
+            background: rgba(10, 10, 15, 0.8);
+        }
+
+        /* Firefox Scrollbar */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #00f5ff rgba(10, 10, 15, 0.8);
+        }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0f0f1a 100%);
@@ -300,13 +332,14 @@
         // CONFIGURATION
         // ============================================
         const CONFIG = {
-            DOT_VISUAL_RADIUS: 10,
-            DOT_HIT_RADIUS: 40,
-            LINE_WIDTH: 4,
+            DOT_VISUAL_RADIUS: 16,
+            DOT_HIT_RADIUS: 18,
+            LINE_WIDTH: 6,
             GRID_SPACING: 100,
             CANVAS_PADDING: 150,
             MAX_LINES: 4,
-            TOTAL_DOTS: 9
+            TOTAL_DOTS: 9,
+            MIN_LINE_DISTANCE: 30 // Minimum distance to count as a new line
         };
 
         const COLORS = {
@@ -320,6 +353,118 @@
         };
 
         // ============================================
+        // AUDIO MANAGER (Web Audio API)
+        // ============================================
+        class AudioManager {
+            constructor() {
+                this.audioContext = null;
+                this.initialized = false;
+            }
+
+            init() {
+                if (this.initialized) return;
+                try {
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    this.initialized = true;
+                } catch (e) {
+                    console.warn('Web Audio API not supported');
+                }
+            }
+
+            // Generate a click/pop sound
+            playClick() {
+                if (!this.initialized) return;
+                const osc = this.audioContext.createOscillator();
+                const gain = this.audioContext.createGain();
+
+                osc.connect(gain);
+                gain.connect(this.audioContext.destination);
+
+                osc.frequency.setValueAtTime(800, this.audioContext.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(400, this.audioContext.currentTime + 0.1);
+
+                gain.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+
+                osc.start();
+                osc.stop(this.audioContext.currentTime + 0.1);
+            }
+
+            // Generate a chime sound for dot collection
+            playDotHit() {
+                if (!this.initialized) return;
+                const osc = this.audioContext.createOscillator();
+                const gain = this.audioContext.createGain();
+
+                osc.connect(gain);
+                gain.connect(this.audioContext.destination);
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1200, this.audioContext.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1800, this.audioContext.currentTime + 0.15);
+
+                gain.gain.setValueAtTime(0.25, this.audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
+
+                osc.start();
+                osc.stop(this.audioContext.currentTime + 0.2);
+            }
+
+            // Generate an error buzz sound
+            playError() {
+                if (!this.initialized) return;
+                const osc = this.audioContext.createOscillator();
+                const gain = this.audioContext.createGain();
+
+                osc.connect(gain);
+                gain.connect(this.audioContext.destination);
+
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(150, this.audioContext.currentTime);
+
+                gain.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.3);
+
+                osc.start();
+                osc.stop(this.audioContext.currentTime + 0.3);
+            }
+
+            // Generate a win fanfare
+            playWin() {
+                if (!this.initialized) return;
+                const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+
+                notes.forEach((freq, i) => {
+                    setTimeout(() => {
+                        const osc = this.audioContext.createOscillator();
+                        const gain = this.audioContext.createGain();
+
+                        osc.connect(gain);
+                        gain.connect(this.audioContext.destination);
+
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(freq, this.audioContext.currentTime);
+
+                        gain.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                        gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.4);
+
+                        osc.start();
+                        osc.stop(this.audioContext.currentTime + 0.4);
+                    }, i * 120);
+                });
+            }
+        }
+
+        // ============================================
+        // HAPTIC FEEDBACK
+        // ============================================
+        function triggerHaptic(pattern = [50]) {
+            if ('vibrate' in navigator) {
+                navigator.vibrate(pattern);
+            }
+        }
+
+        // ============================================
         // GAME STATE
         // ============================================
         let canvas, ctx;
@@ -329,6 +474,7 @@
         let currentMousePos = null;
         let gameEnded = false;
         let gameStarted = false;
+        let audioManager = new AudioManager();
 
         // ============================================
         // INITIALIZATION
@@ -406,6 +552,9 @@
             if (gameEnded) return;
             e.preventDefault();
 
+            // Initialize audio on first interaction (required by browsers)
+            audioManager.init();
+
             const pos = getPointerPos(e);
 
             if (!gameStarted) {
@@ -414,26 +563,63 @@
                 vertices = [pos];
                 hitDots.clear();
                 dots.forEach(dot => dot.hit = false);
+
+                const dotsHitBefore = hitDots.size;
                 checkDotHit(pos);
+
+                audioManager.playClick();
+                triggerHaptic([30]);
+
+                // Play dot hit sound if we collected dots
+                if (hitDots.size > dotsHitBefore) {
+                    audioManager.playDotHit();
+                    triggerHaptic([50]);
+                }
             } else {
                 // Subsequent clicks - add new vertex (new line)
                 if (vertices.length >= CONFIG.MAX_LINES + 1) {
                     // Already have max lines, check for win
+                    audioManager.playError();
+                    triggerHaptic([100, 50, 100]);
                     endGame(false, 'Maximum 4 lines reached!');
                     return;
                 }
 
+                // Check if new point is too close to the last vertex
+                const lastVertex = vertices[vertices.length - 1];
+                const dx = pos.x - lastVertex.x;
+                const dy = pos.y - lastVertex.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < CONFIG.MIN_LINE_DISTANCE) {
+                    // Too close, don't count as a new line - just update preview
+                    return;
+                }
+
+                const dotsHitBefore = hitDots.size;
                 vertices.push(pos);
 
                 // Check dots along the new line segment
-                const lastVertex = vertices[vertices.length - 2];
                 checkDotsAlongLine(lastVertex, pos);
                 checkDotHit(pos);
 
+                audioManager.playClick();
+                triggerHaptic([30]);
+
+                // Play dot hit sound if we collected new dots
+                if (hitDots.size > dotsHitBefore) {
+                    audioManager.playDotHit();
+                    triggerHaptic([50]);
+                }
+
                 // Check win/lose conditions
                 if (hitDots.size === CONFIG.TOTAL_DOTS) {
+                    audioManager.playWin();
+                    triggerHaptic([100, 50, 100, 50, 200]);
                     endGame(true);
                 } else if (vertices.length > CONFIG.MAX_LINES) {
+                    audioManager.playError();
+                    triggerHaptic([100, 50, 100]);
                     endGame(false, `Only ${hitDots.size} of 9 dots connected. Think outside the box!`);
                 }
             }
@@ -644,13 +830,13 @@
             // Draw small circles at each vertex point
             vertices.forEach((vertex, index) => {
                 ctx.beginPath();
-                ctx.arc(vertex.x, vertex.y, 6, 0, Math.PI * 2);
+                ctx.arc(vertex.x, vertex.y, 8, 0, Math.PI * 2);
                 ctx.fillStyle = index === 0 ? '#00ff88' : '#ffffff';
                 ctx.fill();
 
                 // Inner dot
                 ctx.beginPath();
-                ctx.arc(vertex.x, vertex.y, 3, 0, Math.PI * 2);
+                ctx.arc(vertex.x, vertex.y, 4, 0, Math.PI * 2);
                 ctx.fillStyle = '#0a0a0f';
                 ctx.fill();
             });
@@ -699,8 +885,8 @@
 
                 // Draw inner highlight
                 ctx.beginPath();
-                ctx.arc(dot.x - radius * 0.3, dot.y - radius * 0.3, radius * 0.4, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.arc(dot.x - radius * 0.35, dot.y - radius * 0.35, radius * 0.3, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
                 ctx.fill();
             });
         }
